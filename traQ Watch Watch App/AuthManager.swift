@@ -266,7 +266,7 @@ final class AuthManager: ObservableObject {
         savedSession = nil
         username = nil
     }
-    
+
     func fetchActivities() async throws -> [ActivityMessage] {
         guard let session = savedSession else {
             throw AuthError.invalidCredentials
@@ -293,11 +293,85 @@ final class AuthManager: ObservableObject {
         _ = try validate(response, expected: 200)
 
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        // RFC 3339は小数秒の有無をどちらも許す。
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let value = try decoder.singleValueContainer().decode(String.self)
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = formatter.date(from: value) { return date }
+            formatter.formatOptions = [.withInternetDateTime]
+            if let date = formatter.date(from: value) { return date }
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "Invalid RFC 3339 date"
+            ))
+        }
 
         return try decoder.decode(
             [ActivityMessage].self,
             from: data
         )
+    }
+
+    private func get(
+        _ path: String
+    ) async throws -> Data {
+        guard let session = savedSession else {
+            throw AuthError.invalidCredentials
+        }
+
+        let req = try request(
+            path,
+            session: session
+        )
+
+        let (data, response) = try await client.data(for: req)
+        _ = try validate(response, expected: 200)
+
+        return data
+    }
+
+    func fetchUsers() async throws -> [String: TraQUser] {
+        let data = try await get("users")
+        let users = try JSONDecoder().decode(
+            [TraQUser].self,
+            from: data
+        )
+
+        return Dictionary(
+            uniqueKeysWithValues: users.map { ($0.id, $0) }
+        )
+    }
+
+    func fetchUserIcon(userId: String) async throws -> Data {
+        // UUIDの形式を確認してパスに埋め込む
+        guard let id = UUID(uuidString: userId) else {
+            throw AuthError.invalidResponse
+        }
+
+        return try await get(
+            "users/\(id.uuidString.lowercased())/icon"
+        )
+    }
+
+    func fetchChannelPath(channelId: String) async throws -> String {
+        guard let id = UUID(uuidString: channelId) else {
+            throw AuthError.invalidResponse
+        }
+
+        let data = try await get(
+            "channels/\(id.uuidString.lowercased())/path"
+        )
+
+        struct ChannelPathResponse: Decodable {
+            let path: String
+        }
+
+        let response = try JSONDecoder().decode(
+            ChannelPathResponse.self,
+            from: data
+        )
+
+        return "#" + response.path
     }
 }

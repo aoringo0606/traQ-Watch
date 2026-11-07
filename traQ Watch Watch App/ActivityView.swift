@@ -6,86 +6,100 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct ActivityView: View {
     @ObservedObject var auth: AuthManager
 
-    @State private var messages: [ActivityMessage] = []
-    @State private var isLoading = false
-    @State private var errorMessage: String?
+    @StateObject private var store = ActivityStore()
 
     var body: some View {
         NavigationStack {
             List {
-                if isLoading && messages.isEmpty {
+                if store.isLoading && store.messages.isEmpty {
                     ProgressView("Loading...")
                 }
 
-                if let errorMessage {
+                if let errorMessage = store.errorMessage {
                     Text(errorMessage)
                         .foregroundStyle(.red)
                         .font(.caption)
 
                     Button("Retry") {
                         Task {
-                            await loadActivities()
+                            await store.load(auth: auth)
                         }
                     }
                 }
 
-                ForEach(messages) { message in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(message.content)
-                            .font(.body)
-
-                        Text(message.createdAt, style: .time)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 4)
+                ForEach(store.messages) { message in
+                    activityRow(message)
                 }
 
-                if messages.isEmpty &&
-                    !isLoading &&
-                    errorMessage == nil {
+                if store.messages.isEmpty &&
+                    !store.isLoading &&
+                    store.errorMessage == nil {
                     Text("No activities")
                         .foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("Activity")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Task {
-                            await loadActivities()
-                        }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .disabled(isLoading)
-                }
-            }
             .refreshable {
-                await loadActivities()
+                await store.load(auth: auth)
             }
             .task {
-                await loadActivities()
+                guard !store.hasLoaded else { return }
+                await store.load(auth: auth)
             }
         }
     }
 
-    @MainActor
-    private func loadActivities() async {
-        guard !isLoading else { return }
+    private func activityRow(
+        _ message: ActivityMessage
+    ) -> some View {
+        let user = store.users[message.userId]
+        let path = store.channelPaths[message.channelId]
 
-        isLoading = true
-        errorMessage = nil
-        defer { isLoading = false }
+        return HStack(alignment: .top, spacing: 8) {
+            userIcon(message.userId)
 
-        do {
-            messages = try await auth.fetchActivities()
-        } catch {
-            errorMessage = error.localizedDescription
+            VStack(alignment: .leading, spacing: 4) {
+                Text(
+                    user.map { $0.displayName.isEmpty ? $0.name : $0.displayName } ?? "Unknown"
+                )
+                .font(.headline)
+
+                Text(path ?? "#unknown")
+                    .font(.caption2)
+                    .foregroundStyle(.blue)
+
+                Text(message.content)
+                    .font(.body)
+
+                Text(message.createdAt, format: .dateTime.month().day().hour().minute())
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
         }
+        .padding(.vertical, 4)
     }
+
+    private func userIcon(_ userId: String) -> some View {
+        Group {
+            if let data = store.icons[userId],
+               let image = UIImage(data: data) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .accessibilityLabel("投稿者のアイコン")
+            } else {
+                Image(systemName: "person.crop.circle.fill")
+                    .resizable()
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 30, height: 30)
+        .clipShape(Circle())
+    }
+
 }
