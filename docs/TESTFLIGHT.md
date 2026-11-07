@@ -17,7 +17,7 @@
 
 Apple Developerで両方の明示的App IDを登録し、各ID用のApp Store Connect配布プロファイルを作成する。両方とも同じTeamと使用するApple Distribution証明書に対応させる。FirstApp用のプロファイルはBundle IDが異なるため流用できない。
 
-App Store Connectにアプリのレコードを作成し、親のBundle ID **`jp.trap.traQ-Watch`** を選ぶ。watchkitapp側のIDを親アプリのレコードに指定しない。
+App Store Connectで新規アプリを作成するとき、プラットフォームは **iOS** を選ぶ（Watch-onlyアプリもApp Store Connect上ではiOSに分類される）。親のBundle ID **`jp.trap.traQ-Watch`** を選ぶ。watchkitapp側のIDを親アプリのレコードに指定しない。
 
 ## GitHub Secrets
 
@@ -82,6 +82,7 @@ python3 scripts/testflight.py verify \
 
 参照:
 
+- [新規アプリの作成とWatch-onlyのプラットフォーム](https://developer.apple.com/help/app-store-connect/create-an-app-record/add-a-new-app/)
 - [Watch-onlyアプリの配布](https://help.apple.com/xcode/mac/current/en.lproj/devaba4602fd.html)
 - [GitHub Actionsへの署名アセット導入](https://docs.github.com/en/actions/how-tos/deploy/deploy-to-third-party-platforms/sign-xcode-applications)
 - [macOS 26 RunnerのXcode一覧](https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md)
