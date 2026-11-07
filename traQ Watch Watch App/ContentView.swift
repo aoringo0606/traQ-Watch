@@ -15,7 +15,7 @@ struct ContentView: View {
             if auth.isLoading && auth.username == nil {
                 ProgressView("Loading...")
             } else if auth.username != nil {
-                LoggedInView(auth: auth)
+                ActivityView(auth: auth)
             } else {
                 LoginView(auth: auth)
             }

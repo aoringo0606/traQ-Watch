@@ -266,4 +266,38 @@ final class AuthManager: ObservableObject {
         savedSession = nil
         username = nil
     }
+    
+    func fetchActivities() async throws -> [ActivityMessage] {
+        guard let session = savedSession else {
+            throw AuthError.invalidCredentials
+        }
+
+        var req = try request(
+            "activity/timeline",
+            session: session
+        )
+
+        var components = URLComponents(
+            url: req.url!,
+            resolvingAgainstBaseURL: false
+        )!
+
+        components.queryItems = [
+            URLQueryItem(name: "limit", value: "20"),
+            URLQueryItem(name: "all", value: "true")
+        ]
+
+        req.url = components.url!
+
+        let (data, response) = try await client.data(for: req)
+        _ = try validate(response, expected: 200)
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        return try decoder.decode(
+            [ActivityMessage].self,
+            from: data
+        )
+    }
 }
