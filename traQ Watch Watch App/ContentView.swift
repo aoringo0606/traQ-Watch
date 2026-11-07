@@ -8,14 +8,27 @@
 import SwiftUI
 
 struct ContentView: View {
+    let messages = [
+        "こんにちは!",
+        "**太字**のテスト",
+        "!!スポイラー!!",
+        "#geeneral で話しましょう"
+    ]
+    
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        NavigationStack {
+            List(messages, id: \.self) { message in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("aorinngo")
+                        .font(.caption)
+                        .foregroundStyle(.blue)
+                    
+                    Text(message)
+                        .font(.body)
+                }
+            }
+            .navigationTitle("Activity")
         }
-        .padding()
     }
 }
 
