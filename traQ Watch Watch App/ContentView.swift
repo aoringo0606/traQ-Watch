@@ -8,29 +8,24 @@
 import SwiftUI
 
 struct ContentView: View {
-    let messages = [
-        "こんにちは!",
-        "**太字**のテスト",
-        "!!スポイラー!!",
-        "#geeneral で話しましょう"
-    ]
-    
+    @StateObject private var auth = AuthManager()
+
     var body: some View {
-        NavigationStack {
-            List(messages, id: \.self) { message in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("aorinngo")
-                        .font(.caption)
-                        .foregroundStyle(.blue)
-                    
-                    Text(message)
-                        .font(.body)
-                }
+        Group {
+            if auth.isLoading && auth.username == nil {
+                ProgressView("Loading...")
+            } else if auth.username != nil {
+                LoggedInView(auth: auth)
+            } else {
+                LoginView(auth: auth)
             }
-            .navigationTitle("Activity")
+        }
+        .task {
+            await auth.restore()
         }
     }
 }
+
 
 #Preview {
     ContentView()
