@@ -78,3 +78,7 @@ xcrun simctl launch booted jp.trap.traQ-Watch.watchkitapp --message-preview=basi
 URL・ユーザー名は適切な`textContentType`を設定し、自動大文字化・自動補正を無効にする。watchOSではアプリからキーボード配列や入力言語を強制できないため、QWERTYの利用にはWatch側の英語キーボード選択が必要な場合がある。
 
 アクティビティ画面は左上がログアウト、右上が再読み込み。再読み込みはPull to Refreshと同じ取得処理を使用し、通信中は重複操作を無効にする。
+
+## アプリアイコン
+
+公式クライアントの`android-chrome-512x512-maskable.png`を1024×1024へ拡大し、`AppIcon.appiconset/traq-icon.png`に設定する。デザインは変更していない。取得元と同梱ライセンスは[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)を参照。
