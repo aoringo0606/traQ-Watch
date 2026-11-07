@@ -35,3 +35,5 @@ xcodebuild -project 'traQ Watch.xcodeproj' -target 'traQ Watch Watch App' -confi
 
 検証コマンド: `swift test --scratch-path /tmp/traq-message-tests`。
 解析方式・メディアの制限・Simulatorのサンプル画面・実機確認項目は[開発ガイド](docs/DEVELOPMENT.md)を参照する。
+
+TestFlightの署名・CI変更時は[配布手順](docs/TESTFLIGHT.md)を読む。Watch-onlyの配布用コンテナとWatch本体はBundle ID/署名プロファイルが異なる。アップロード用ワークフローは手動実行・内部テスト専用。

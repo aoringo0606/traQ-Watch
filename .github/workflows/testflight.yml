@@ -1,0 +1,151 @@
+name: Upload traQ Watch to TestFlight
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: 'Optional CFBundleVersion override (default: run number.run attempt)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: traq-watch-testflight
+  cancel-in-progress: false
+
+jobs:
+  build-and-upload:
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      PROJECT_PATH: traQ Watch.xcodeproj
+      SCHEME: traQ Watch Watch App
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check toolchain and build number
+        env:
+          REQUESTED_BUILD_NUMBER: ${{ inputs.build_number }}
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcodebuild -list -project "$PROJECT_PATH"
+          python3 - <<'PY'
+          import os, re
+          value = os.environ.get("REQUESTED_BUILD_NUMBER") or f'{os.environ["GITHUB_RUN_NUMBER"]}.{os.environ["GITHUB_RUN_ATTEMPT"]}'
+          if not re.fullmatch(r"[1-9][0-9]{0,3}(?:\.[0-9]{1,2}){0,2}", value):
+              raise SystemExit("Build number must be a valid CFBundleVersion, e.g. 1.1 or 100")
+          with open(os.environ["GITHUB_ENV"], "a") as stream:
+              stream.write(f"BUILD_NUMBER={value}\n")
+          PY
+
+      - name: Test Core and distribution configuration
+        run: |
+          set -euo pipefail
+          swift test --scratch-path "$RUNNER_TEMP/core-tests"
+          python3 -m unittest discover -s scripts/tests -v
+
+      - name: Install signing assets
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CERT_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          CONTAINER_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+          WATCH_PROFILE_BASE64: ${{ secrets.APPLE_WATCH_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          : "${APPLE_TEAM_ID:?Missing APPLE_TEAM_ID}"
+          : "${CERT_BASE64:?Missing APPLE_CERTIFICATE_BASE64}"
+          : "${CONTAINER_PROFILE_BASE64:?Missing APPLE_PROVISIONING_PROFILE_BASE64}"
+          : "${WATCH_PROFILE_BASE64:?Missing APPLE_WATCH_PROVISIONING_PROFILE_BASE64}"
+          umask 077
+          printf '%s' "$CERT_BASE64" | base64 -D > "$RUNNER_TEMP/distribution.p12"
+          printf '%s' "$CONTAINER_PROFILE_BASE64" | base64 -D > "$RUNNER_TEMP/container.mobileprovision"
+          printf '%s' "$WATCH_PROFILE_BASE64" | base64 -D > "$RUNNER_TEMP/watch.mobileprovision"
+          security cms -D -i "$RUNNER_TEMP/container.mobileprovision" > "$RUNNER_TEMP/container-profile.plist"
+          security cms -D -i "$RUNNER_TEMP/watch.mobileprovision" > "$RUNNER_TEMP/watch-profile.plist"
+          python3 scripts/testflight.py prepare "$RUNNER_TEMP"
+
+          KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/distribution.p12" -k "$KEYCHAIN_PATH" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+
+          PROFILE_DIR="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
+          mkdir -p "$PROFILE_DIR"
+          # GITHUB_ENV is available to subsequent steps, so read the UUIDs here too.
+          CONTAINER_UUID=$(plutil -extract UUID raw "$RUNNER_TEMP/container-profile.plist")
+          WATCH_UUID=$(plutil -extract UUID raw "$RUNNER_TEMP/watch-profile.plist")
+          cp "$RUNNER_TEMP/container.mobileprovision" "$PROFILE_DIR/$CONTAINER_UUID.mobileprovision"
+          cp "$RUNNER_TEMP/watch.mobileprovision" "$PROFILE_DIR/$WATCH_UUID.mobileprovision"
+
+      - name: Archive Watch-only app
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project "$PROJECT_PATH" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=watchOS' \
+            -xcconfig "$RUNNER_TEMP/Signing.xcconfig" \
+            -archivePath "$RUNNER_TEMP/traQWatch.xcarchive" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
+          python3 scripts/testflight.py verify \
+            "$RUNNER_TEMP/traQWatch.xcarchive/Products/Applications/traQ Watch.app" "$BUILD_NUMBER"
+
+      - name: Export and verify IPA
+        run: |
+          set -euo pipefail
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/traQWatch.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
+          IPA_PATH=$(find "$RUNNER_TEMP/export" -maxdepth 1 -name '*.ipa' -print -quit)
+          test -n "$IPA_PATH"
+          unzip -q "$IPA_PATH" -d "$RUNNER_TEMP/ipa-check"
+          python3 scripts/testflight.py verify "$RUNNER_TEMP/ipa-check/Payload/traQ Watch.app" "$BUILD_NUMBER"
+          printf 'IPA_PATH=%s\n' "$IPA_PATH" >> "$GITHUB_ENV"
+
+      - name: Upload to App Store Connect
+        env:
+          API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+          API_PRIVATE_KEY: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          : "${API_KEY_ID:?Missing APPSTORE_API_KEY_ID}"
+          : "${API_ISSUER_ID:?Missing APPSTORE_API_ISSUER_ID}"
+          : "${API_PRIVATE_KEY:?Missing APPSTORE_API_PRIVATE_KEY}"
+          export API_PRIVATE_KEYS_DIR="$RUNNER_TEMP/appstore-keys"
+          mkdir -p "$API_PRIVATE_KEYS_DIR"
+          chmod 700 "$API_PRIVATE_KEYS_DIR"
+          umask 077
+          printf '%s' "$API_PRIVATE_KEY" > "$API_PRIVATE_KEYS_DIR/AuthKey_${API_KEY_ID}.p8"
+          xcrun altool --upload-app --file "$IPA_PATH" \
+            --apiKey "$API_KEY_ID" --apiIssuer "$API_ISSUER_ID"
+
+      - name: Remove signing assets
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/signing.keychain-db" ]]; then
+            security delete-keychain "$RUNNER_TEMP/signing.keychain-db"
+          fi
+          PROFILE_DIR="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
+          for profile_uuid in "${CONTAINER_PROFILE_UUID:-}" "${WATCH_PROFILE_UUID:-}"; do
+            if [[ -n "$profile_uuid" ]]; then rm -f "$PROFILE_DIR/$profile_uuid.mobileprovision"; fi
+          done
+          rm -f "$RUNNER_TEMP/distribution.p12" "$RUNNER_TEMP/container.mobileprovision" "$RUNNER_TEMP/watch.mobileprovision"
+          rm -f "$RUNNER_TEMP/container-profile.plist" "$RUNNER_TEMP/watch-profile.plist"
+          if [[ -d "$RUNNER_TEMP/appstore-keys" ]]; then
+            find "$RUNNER_TEMP/appstore-keys" -type f -name 'AuthKey_*.p8' -delete
+          fi
