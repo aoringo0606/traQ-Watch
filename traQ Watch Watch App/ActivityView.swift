@@ -85,6 +85,10 @@ struct ActivityView: View {
     ) -> some View {
         let user = store.users[message.userId]
         let path = store.channelPaths[message.channelId]
+        let references = store.quoteReferences[message.id] ?? []
+        let expanded = Set(references.compactMap { ref -> String? in
+            if case .loaded = store.quotes[ref.id] { return ref.id }; return nil
+        })
 
         return HStack(alignment: .top, spacing: 8) {
             userIcon(message.userId)
@@ -99,9 +103,27 @@ struct ActivityView: View {
                     .font(.caption2)
                     .foregroundStyle(.blue)
 
-                MessageContentView(blocks: store.parsedContents[message.id] ?? [], media: media)
+                MessageContentView(blocks: MessageQuoteLinks.body(store.parsedContents[message.id] ?? [], expanded: expanded), media: media)
                     .id(message.updatedAt)
                     .font(.body)
+
+                ForEach(references) { reference in
+                    switch store.quotes[reference.id] {
+                    case .loaded(let preview):
+                        QuoteCardView(preview: preview,
+                                      user: store.users[preview.message.userId],
+                                      icon: store.icons[preview.message.userId],
+                                      channelPath: store.channelPaths[preview.message.channelId],
+                                      media: media)
+                    case .loading:
+                        ProgressView("引用を読み込み中")
+                            .font(.caption2)
+                    case .failed, nil:
+                        Text("引用を取得できませんでした")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
 
                 Text(message.createdAt, format: .dateTime.month().day().hour().minute())
                     .font(.caption2)

@@ -158,6 +158,11 @@ final class MessageMediaStore: ObservableObject {
         phases[resource] = .ready
     }
 
+    func installPreviewUnicode(_ emoji: String, name: String) {
+        previewOnly = true
+        phases[.stamp(name)] = .unicode(emoji)
+    }
+
     func installPreviewFailure(_ reason: String, for resource: MessageMediaResource) {
         previewOnly = true
         phases[resource] = .failed(reason)

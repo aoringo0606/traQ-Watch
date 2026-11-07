@@ -14,6 +14,7 @@ struct RenderingPreviewView: View {
         media.installPreviewFixtures()
         _media = StateObject(wrappedValue: media)
         let samples: [String: String] = [
+            "quote": "この投稿についてです。",
             "basic": "**太字** *斜体* ~~打消し~~ `code`\n[リンク](https://example.com)\n\n段落と改行を保持します。",
             "spoiler": "文中の **!!*秘密の文章*!!** です。\n!!画像も隠せます ![サンプル](https://example.com/sample.png)!!",
             "revealed": "文中の **!!*秘密の文章*!!** です。",
@@ -33,6 +34,16 @@ struct RenderingPreviewView: View {
             ScrollView {
                 MessageContentView(blocks: blocks, media: media, revealed: mode == "revealed" ? [0] : [])
                     .padding(.horizontal, 8)
+                if mode == "quote" {
+                    QuoteCardView(
+                        preview: MessageQuotePreview(message: ActivityMessage(
+                            id: "01a170b1-8dd2-7baf-bccd-9d3e0d659e79", userId: "preview", channelId: "preview",
+                            content: "おめでとう :tada: :sample: **引用元の本文**です。長い文章は3行までに省略します。画像と次の引用は展開しません。",
+                            createdAt: Date(timeIntervalSince1970: 1794018600), updatedAt: Date(timeIntervalSince1970: 1794018600)), server: nil),
+                        user: TraQUser(id: "preview", name: "aorinngo", displayName: "青りんご"),
+                        icon: nil, channelPath: "#times/26/aorinngo", media: media)
+                    .padding(.horizontal, 8)
+                }
             }
             .navigationTitle("検証: \(mode)")
         }
@@ -59,6 +70,7 @@ extension MessageMediaStore {
         installPreviewImage(UIImage(cgImage: cgImage), for: .stamp("sample"))
         installPreviewFailure("テスト用のHTTP 404", for: .image("https://example.com/missing.png"))
         installPreviewLoading(for: .image("https://example.com/pending.png"))
+        installPreviewUnicode("🎉", name: "tada")
         installPreviewFailure("未知のスタンプ", for: .stamp("unknown"))
     }
 }

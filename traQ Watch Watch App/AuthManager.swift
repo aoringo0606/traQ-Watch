@@ -277,16 +277,18 @@ final class AuthManager: ObservableObject {
     }
 
     private func get(
-        _ path: String
+        _ path: String,
+        timeout: TimeInterval? = nil
     ) async throws -> Data {
         guard let session = savedSession else {
             throw AuthError.invalidCredentials
         }
 
-        let req = try request(
+        var req = try request(
             path,
             session: session
         )
+        if let timeout { req.timeoutInterval = timeout }
 
         let (data, response) = try await client.data(for: req)
         _ = try validate(response, expected: 200)
@@ -372,6 +374,13 @@ final class AuthManager: ObservableObject {
         struct Meta: Decodable { let name: String }
         let filename = try JSONDecoder().decode(Meta.self, from: data).name
         return UnicodeStamp.emoji(filename: filename)
+    }
+
+
+    func fetchMessage(id: String) async throws -> ActivityMessage {
+        guard let uuid = UUID(uuidString: id) else { throw AuthError.invalidResponse }
+        let data = try await get("messages/\(uuid.uuidString.lowercased())", timeout: 10)
+        return try TraQAPI.message(from: data)
     }
 
 }

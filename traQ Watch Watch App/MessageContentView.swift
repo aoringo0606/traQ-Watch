@@ -188,6 +188,8 @@ struct MessageContentView: View {
                 piece = Text(verbatim: image.alt)
             case .file(let file):
                 piece = Text(verbatim: file.label).bold().foregroundColor(.blue)
+            case .quote(let quote):
+                piece = Text(verbatim: quote.label).bold().foregroundColor(.blue)
             case nil:
                 piece = styledText(span)
             }

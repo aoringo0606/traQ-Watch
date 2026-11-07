@@ -6,6 +6,8 @@ import UIKit
 @MainActor
 final class ActivityStore: ObservableObject {
     @Published private(set) var parsedContents: [String: [MessageBlock]] = [:]
+    @Published private(set) var quoteReferences: [String: [MessageQuoteReference]] = [:]
+    @Published private(set) var quotes: [String: MessageQuoteState] = [:]
     @Published private(set) var messages: [ActivityMessage] = []
     @Published private(set) var users: [String: TraQUser] = [:]
     @Published private(set) var channelPaths: [String: String] = [:]
@@ -37,13 +39,31 @@ final class ActivityStore: ObservableObject {
             return
         }
 
-        let visibleChannels = Set(messages.map(\.channelId))
-        let visibleUsers = Set(messages.map(\.userId))
+        async let quoteLoading: Void = loadQuotes(auth: auth)
+        var failures = await loadMetadata(for: messages, auth: auth)
+        await quoteLoading
+        guard !Task.isCancelled else { return }
+        let quotedMessages = quotes.values.compactMap { state -> ActivityMessage? in
+            if case .loaded(let preview) = state { return preview.message }; return nil
+        }
+        failures += await loadMetadata(for: quotedMessages, auth: auth)
+        let metadataMessages = messages + quotedMessages
+        let visibleChannels = Set(metadataMessages.map(\.channelId))
+        let visibleUsers = Set(metadataMessages.map(\.userId))
         channelPaths = channelPaths.filter { visibleChannels.contains($0.key) }
         icons = icons.filter { visibleUsers.contains($0.key) }
+        if !Task.isCancelled && !failures.isEmpty {
+            errorMessage = "一部の情報を取得できませんでした\n" + Set(failures).sorted().joined(separator: "\n")
+        }
+    }
+
+    private func loadMetadata(for metadataMessages: [ActivityMessage], auth: AuthManager) async -> [String] {
+        guard !metadataMessages.isEmpty else { return [] }
+        let visibleChannels = Set(metadataMessages.map(\.channelId))
+        let visibleUsers = Set(metadataMessages.map(\.userId))
         var failures: [String] = []
         do {
-            if users.isEmpty || messages.contains(where: { users[$0.userId] == nil }) {
+            if users.isEmpty || metadataMessages.contains(where: { users[$0.userId] == nil }) {
                 users = try await auth.fetchUsers(forceRefresh: !users.isEmpty)
             }
         } catch {
@@ -52,7 +72,7 @@ final class ActivityStore: ObservableObject {
 
         // 成功した結果だけをキャッシュする。失敗分は次の手動更新で再試行する。
         await withTaskGroup(of: (String, String?, String?).self) { group in
-            for id in Set(messages.map(\.channelId)) where channelPaths[id] == nil {
+            for id in visibleChannels where channelPaths[id] == nil {
                 group.addTask {
                     do {
                         return (id, try await auth.fetchChannelPath(channelId: id), nil)
@@ -66,9 +86,9 @@ final class ActivityStore: ObservableObject {
                 if let error { failures.append("チャンネルパス: \(error)") }
             }
         }
-        let missingUserIDs = Array(Set(messages.map(\.userId)).filter { icons[$0] == nil })
+        let missingUserIDs = Array(visibleUsers.filter { icons[$0] == nil })
         for start in stride(from: 0, to: missingUserIDs.count, by: 3) {
-            if Task.isCancelled { return }
+            if Task.isCancelled { return failures }
             await withTaskGroup(of: (String, Data?, String?).self) { group in
                 for id in missingUserIDs[start..<min(start + 3, missingUserIDs.count)] {
                     group.addTask {
@@ -94,8 +114,21 @@ final class ActivityStore: ObservableObject {
                 }
             }
         }
-        if !Task.isCancelled && !failures.isEmpty {
-            errorMessage = "一部の情報を取得できませんでした\n" + Set(failures).sorted().joined(separator: "\n")
-        }
+        return failures
     }
+
+    private func loadQuotes(auth: AuthManager) async {
+        guard let server = auth.currentServerURL else { quoteReferences = [:]; quotes = [:]; return }
+        let planned = MessageQuoteLinks.plan(messages: messages, parsed: parsedContents)
+        quoteReferences = planned
+        let refs = messages.flatMap { planned[$0.id] ?? [] }
+        quotes = Dictionary(refs.map { ($0.id, MessageQuoteState.loading) }, uniquingKeysWith: { first, _ in first })
+        let loaded = await MessageQuoteLoader.load(references: refs, timeline: messages, server: server) { id in
+            try await auth.fetchMessage(id: id)
+        }
+        if Task.isCancelled {
+            quotes = Dictionary(refs.map { ($0.id, MessageQuoteState.failed) }, uniquingKeysWith: { first, _ in first })
+        } else { quotes = loaded }
+    }
+
 }

@@ -21,6 +21,7 @@ nonisolated indirect enum MessageAttachment: Equatable, Sendable {
     case stamp(StampReference)
     case image(MessageImage)
     case file(MessageFile)
+    case quote(MessageQuoteReference)
 }
 
 nonisolated enum MessageBlock: Equatable, Sendable {
@@ -111,6 +112,10 @@ nonisolated enum MessageParser {
             if !style.contains(.code), let link = run.link, let server,
                let resolved = TraQFileLink.resolve(link.absoluteString, server: server) {
                 return MessageSpan(text: text, style: style, attachment: .file(MessageFile(url: resolved.url.absoluteString, label: text)))
+            }
+            if !style.contains(.code), let link = run.link, let server,
+               let quote = MessageQuoteLinks.reference(link.absoluteString, label: text, server: server) {
+                return MessageSpan(text: text, style: style, attachment: .quote(quote))
             }
             return MessageSpan(text: text, style: style)
         }
@@ -315,14 +320,14 @@ private nonisolated struct InlineParser {
                   let end = remaining[start...].firstIndex(of: "\u{E001}"),
                   let index = Int(remaining[remaining.index(after: start)..<end]), tokens.indices.contains(index) {
                 if start > remaining.startIndex {
-                    result.append(contentsOf: TraQFileLink.expand(MessageSpan(text: String(remaining[..<start]), style: span.style), server: server))
+                    result.append(contentsOf: TraQFileLink.expand(MessageSpan(text: String(remaining[..<start]), style: span.style), server: server).flatMap { MessageQuoteLinks.expand($0, server: server) })
                 }
                 var token = tokens[index]
                 token.style.formUnion(span.style)
                 result.append(token)
                 remaining = remaining[remaining.index(after: end)...]
             }
-            if !remaining.isEmpty { result.append(contentsOf: TraQFileLink.expand(MessageSpan(text: String(remaining), style: span.style), server: server)) }
+            if !remaining.isEmpty { result.append(contentsOf: TraQFileLink.expand(MessageSpan(text: String(remaining), style: span.style), server: server).flatMap { MessageQuoteLinks.expand($0, server: server) }) }
         }
         return result
     }
