@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct ActivityMessage: Identifiable, Decodable {
+nonisolated struct ActivityMessage: Identifiable, Decodable {
     let id: String
     let userId: String
     let channelId: String

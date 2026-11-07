@@ -56,7 +56,10 @@ final class AuthManager: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
 
+    var currentServerURL: URL? { savedSession.flatMap { TraQAPI.serverURL($0.server) } }
     private var savedSession: SavedSession?
+    private let imageClient = ImageHTTPClient()
+    private var userCache: [String: TraQUser]?
 
     private let client: URLSession = {
         let config = URLSessionConfiguration.ephemeral
@@ -69,23 +72,7 @@ final class AuthManager: ObservableObject {
     }()
 
     private func baseURL(_ input: String) throws -> URL {
-        guard let components = URLComponents(string: input),
-              components.scheme?.lowercased() == "https",
-              let host = components.host,
-              !host.isEmpty,
-              components.user == nil,
-              components.password == nil,
-              components.query == nil,
-              components.fragment == nil,
-              components.path.isEmpty ||
-                components.path == "/" else {
-            throw AuthError.invalidServer
-        }
-
-        guard let url = components.url else {
-            throw AuthError.invalidServer
-        }
-
+        guard let url = TraQAPI.serverURL(input) else { throw AuthError.invalidServer }
         return url
     }
 
@@ -173,14 +160,7 @@ final class AuthManager: ObservableObject {
                 forHTTPHeaderField: "Content-Type"
             )
 
-            struct Credentials: Encodable {
-                let name: String
-                let password: String
-            }
-
-            req.httpBody = try JSONEncoder().encode(
-                Credentials(name: name, password: password)
-            )
+            req.httpBody = try TraQAPI.loginBody(name: name, password: password)
 
             let (_, response) = try await client.data(for: req)
             let http = try validate(response, expected: 204)
@@ -225,7 +205,7 @@ final class AuthManager: ObservableObject {
     }
 
     func restore() async {
-        guard let session = KeychainStore.load() else {
+        guard savedSession == nil, let session = KeychainStore.load() else {
             return
         }
 
@@ -264,6 +244,7 @@ final class AuthManager: ObservableObject {
 
         KeychainStore.delete()
         savedSession = nil
+        userCache = nil
         username = nil
     }
 
@@ -277,40 +258,22 @@ final class AuthManager: ObservableObject {
             session: session
         )
 
-        var components = URLComponents(
-            url: req.url!,
-            resolvingAgainstBaseURL: false
-        )!
+        guard let url = req.url, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            throw AuthError.invalidResponse
+        }
 
         components.queryItems = [
             URLQueryItem(name: "limit", value: "20"),
             URLQueryItem(name: "all", value: "true")
         ]
 
-        req.url = components.url!
+        guard let timelineURL = components.url else { throw AuthError.invalidResponse }
+        req.url = timelineURL
 
         let (data, response) = try await client.data(for: req)
         _ = try validate(response, expected: 200)
 
-        let decoder = JSONDecoder()
-        // RFC 3339は小数秒の有無をどちらも許す。
-        decoder.dateDecodingStrategy = .custom { decoder in
-            let value = try decoder.singleValueContainer().decode(String.self)
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            if let date = formatter.date(from: value) { return date }
-            formatter.formatOptions = [.withInternetDateTime]
-            if let date = formatter.date(from: value) { return date }
-            throw DecodingError.dataCorrupted(.init(
-                codingPath: decoder.codingPath,
-                debugDescription: "Invalid RFC 3339 date"
-            ))
-        }
-
-        return try decoder.decode(
-            [ActivityMessage].self,
-            from: data
-        )
+        return try TraQAPI.activities(from: data)
     }
 
     private func get(
@@ -331,16 +294,17 @@ final class AuthManager: ObservableObject {
         return data
     }
 
-    func fetchUsers() async throws -> [String: TraQUser] {
+    func fetchUsers(forceRefresh: Bool = false) async throws -> [String: TraQUser] {
+        if !forceRefresh, let userCache { return userCache }
         let data = try await get("users")
         let users = try JSONDecoder().decode(
             [TraQUser].self,
             from: data
         )
 
-        return Dictionary(
-            uniqueKeysWithValues: users.map { ($0.id, $0) }
-        )
+        let mapped = Dictionary(users.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+        userCache = mapped
+        return mapped
     }
 
     func fetchUserIcon(userId: String) async throws -> Data {
@@ -349,9 +313,9 @@ final class AuthManager: ObservableObject {
             throw AuthError.invalidResponse
         }
 
-        return try await get(
-            "users/\(id.uuidString.lowercased())/icon"
-        )
+        guard let session = savedSession else { throw AuthError.invalidCredentials }
+        let req = try request("users/\(id.uuidString.lowercased())/icon", session: session)
+        return try await imageClient.data(for: req)
     }
 
     func fetchChannelPath(channelId: String) async throws -> String {
@@ -363,15 +327,51 @@ final class AuthManager: ObservableObject {
             "channels/\(id.uuidString.lowercased())/path"
         )
 
-        struct ChannelPathResponse: Decodable {
-            let path: String
-        }
-
-        let response = try JSONDecoder().decode(
-            ChannelPathResponse.self,
-            from: data
-        )
-
-        return "#" + response.path
+        return try TraQAPI.channelPath(from: data)
     }
+
+    func fetchStamps() async throws -> [String: TraQStamp] {
+        let data = try await get("stamps")
+        let stamps = try JSONDecoder().decode([TraQStamp].self, from: data)
+        return Dictionary(stamps.map { ($0.name, $0) }, uniquingKeysWith: { _, latest in latest })
+    }
+
+    func stampImageRequest(id: String, userIcon: Bool = false) throws -> URLRequest {
+        guard let session = savedSession else { throw AuthError.invalidCredentials }
+        guard let uuid = UUID(uuidString: id) else { throw AuthError.invalidResponse }
+        let id = uuid.uuidString.lowercased()
+        return try request(userIcon ? "users/\(id)/icon" : "stamps/\(id)/image", session: session)
+    }
+
+    func messageImageRequest(_ raw: String) throws -> URLRequest {
+        guard let session = savedSession else { throw AuthError.invalidCredentials }
+        let resolved = try MediaURLPolicy.resolve(raw, server: baseURL(session.server))
+        var req = URLRequest(url: resolved.url)
+        if resolved.authenticated {
+            req.setValue("r_session=\(session.token)", forHTTPHeaderField: "Cookie")
+        }
+        return req
+    }
+
+    func attachedImageRequest(_ raw: String) async throws -> URLRequest? {
+        guard let session = savedSession, let server = currentServerURL,
+              let resolved = TraQFileLink.resolve(raw, server: server) else { throw ImageLoadError.invalidURL }
+        let id = resolved.url.lastPathComponent
+        let data = try await get("files/\(id)/meta")
+        let meta = try JSONDecoder().decode(TraQFileInfo.self, from: data)
+        guard meta.isImage else { return nil }
+        if meta.hasImageThumbnail { return try request("files/\(id)/thumbnail", session: session) }
+        guard meta.size >= 0, meta.size <= Int64(ImageHTTPClient.maximumBytes) else { throw ImageLoadError.tooLarge }
+        return try request("files/\(id)", session: session)
+    }
+
+
+    func unicodeEmoji(for stamp: TraQStamp) async throws -> String? {
+        guard stamp.isUnicode, let fileID = UUID(uuidString: stamp.fileId) else { return nil }
+        let data = try await get("files/\(fileID.uuidString.lowercased())/meta")
+        struct Meta: Decodable { let name: String }
+        let filename = try JSONDecoder().decode(Meta.self, from: data).name
+        return UnicodeStamp.emoji(filename: filename)
+    }
+
 }

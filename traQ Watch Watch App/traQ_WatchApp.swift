@@ -11,7 +11,15 @@ import SwiftUI
 struct traQ_Watch_Watch_AppApp: App {
     var body: some Scene {
         WindowGroup {
+#if DEBUG
+            if let flag = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--message-preview=") }) {
+                RenderingPreviewView(mode: String(flag.dropFirst("--message-preview=".count)))
+            } else {
+                ContentView()
+            }
+#else
             ContentView()
+#endif
         }
     }
 }

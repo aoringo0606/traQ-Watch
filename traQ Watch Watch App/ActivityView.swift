@@ -12,6 +12,12 @@ struct ActivityView: View {
     @ObservedObject var auth: AuthManager
 
     @StateObject private var store = ActivityStore()
+    @StateObject private var media: MessageMediaStore
+
+    init(auth: AuthManager) {
+        self.auth = auth
+        _media = StateObject(wrappedValue: MessageMediaStore(auth: auth))
+    }
 
     var body: some View {
         NavigationStack {
@@ -27,6 +33,7 @@ struct ActivityView: View {
 
                     Button("Retry") {
                         Task {
+                            media.retryFailures()
                             await store.load(auth: auth)
                         }
                     }
@@ -44,9 +51,28 @@ struct ActivityView: View {
                 }
             }
             .navigationTitle("Activity")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("ログアウト", systemImage: "rectangle.portrait.and.arrow.right") {
+                        Task { await auth.logout() }
+                    }
+                    .disabled(store.isLoading)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("再読み込み", systemImage: "arrow.clockwise") {
+                        Task {
+                            media.retryFailures()
+                            await store.load(auth: auth)
+                        }
+                    }
+                    .disabled(store.isLoading)
+                }
+            }
             .refreshable {
+                media.retryFailures()
                 await store.load(auth: auth)
             }
+            .onDisappear { media.cancel() }
             .task {
                 guard !store.hasLoaded else { return }
                 await store.load(auth: auth)
@@ -73,7 +99,8 @@ struct ActivityView: View {
                     .font(.caption2)
                     .foregroundStyle(.blue)
 
-                Text(message.content)
+                MessageContentView(blocks: store.parsedContents[message.id] ?? [], media: media)
+                    .id(message.updatedAt)
                     .font(.body)
 
                 Text(message.createdAt, format: .dateTime.month().day().hour().minute())
@@ -86,8 +113,7 @@ struct ActivityView: View {
 
     private func userIcon(_ userId: String) -> some View {
         Group {
-            if let data = store.icons[userId],
-               let image = UIImage(data: data) {
+            if let image = store.icons[userId] {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()

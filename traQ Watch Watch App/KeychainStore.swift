@@ -8,11 +8,6 @@
 import Foundation
 import Security
 
-struct SavedSession: Codable {
-    let server: String
-    let token: String
-}
-
 enum KeychainStore {
     private static let service = "traQWatch.session"
     private static let account = "current"

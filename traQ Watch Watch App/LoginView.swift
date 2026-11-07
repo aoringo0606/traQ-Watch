@@ -22,9 +22,12 @@ struct LoginView: View {
 
                 TextField("Server URL", text: $server)
                     .textContentType(.URL)
+                    .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
 
                 TextField("Username", text: $name)
+                    .textContentType(.username)
+                    .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
 
                 SecureField("Password", text: $password)
